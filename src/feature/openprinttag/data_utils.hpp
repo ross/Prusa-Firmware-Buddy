@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "field_values.hpp"
 #include "requests_read_multi.hpp"
 
 #include <filament.hpp>
@@ -85,12 +86,22 @@ struct AbbreviationInfo {
 
     explicit AbbreviationInfo(const RequestRef &req);
 
+    /// Constructs from in-memory values of a superset of the requirements
+    template <CField auto... fields>
+    explicit AbbreviationInfo(const FieldValuesImpl<fields...> &values) {
+        init(values);
+    }
+
     /// Abbreviation of the material
     /// subset of the @p abbreviation_buffer
     std::string_view abbreviation;
 
     /// Buffer used for storing @p abbreviation
     FieldTraits<MainField::material_abbreviation>::Buffer abbreviation_buffer;
+
+private:
+    template <typename Source>
+    void init(const Source &src);
 };
 
 /// Utility for determining UUIDs
@@ -108,12 +119,23 @@ struct UUIDInfo {
 
     explicit UUIDInfo(const RequestRef &req, const TagUID &tag_uid);
 
+    /// Constructs from in-memory values of a superset of the requirements.
+    /// Without a tag UID, @p instance_uuid is known only if present in @p values.
+    template <CField auto... fields>
+    explicit UUIDInfo(const FieldValuesImpl<fields...> &values) {
+        init(values, nullptr);
+    }
+
     using OptionalUUID = CompactOptional<UUID, UUID::nil()>;
 
     OptionalUUID brand_uuid;
     OptionalUUID material_uuid;
     OptionalUUID package_uuid;
     OptionalUUID instance_uuid;
+
+private:
+    template <typename Source>
+    void init(const Source &src, const TagUID *tag_uid);
 };
 
 /// Utility for determining filament parameters
@@ -145,7 +167,13 @@ struct FilamentParametersInfo {
 
     using MissingParameters = std::bitset<filament_type_parameter_count>;
 
+    using FieldValues = Requirements::ApplyOn<FieldValuesImpl>;
+
     explicit FilamentParametersInfo(const RequestRef &req, const TagUID &tag_uid);
+
+    /// Constructs from values that did not come from the printer's reader.
+    /// The parameters are not associated with any tag (no @p FilamentTypeParameters::openprinttag_uid_hash).
+    explicit FilamentParametersInfo(const FieldValues &values);
 
     /// @returns whether the information is missing the specified parameter
     template <auto FilamentTypeParameters::*mem_ptr>
@@ -163,6 +191,10 @@ struct FilamentParametersInfo {
 
     /// Denotes whether the data is complete/reliable enough to be used for operations
     bool data_safe_to_use : 1 = false;
+
+private:
+    template <typename Source>
+    void init(const Source &src, const TagUID *tag_uid);
 };
 
 } // namespace buddy::openprinttag

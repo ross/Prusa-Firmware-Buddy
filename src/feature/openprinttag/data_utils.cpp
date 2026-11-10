@@ -17,11 +17,11 @@ AmountsInfo::AmountsInfo(const RequestRef &req) {
         return;
     }
 
-    if (auto val = req.result<MainField::actual_netto_full_weight>()) {
+    if (auto val = req.template result<MainField::actual_netto_full_weight>()) {
         full_weight_g = *val;
         full_weight_source = ValueSource::actual;
 
-    } else if (auto val = req.result<MainField::nominal_netto_full_weight>()) {
+    } else if (auto val = req.template result<MainField::nominal_netto_full_weight>()) {
         full_weight_g = *val;
         full_weight_source = ValueSource::nominal;
     }
@@ -32,11 +32,11 @@ AmountsInfo::AmountsInfo(const RequestRef &req) {
         full_weight_source = ValueSource::no_value;
     }
 
-    if (auto val = req.result<MainField::actual_full_length>()) {
+    if (auto val = req.template result<MainField::actual_full_length>()) {
         full_length_mm = *val;
         full_length_source = ValueSource::actual;
 
-    } else if (auto val = req.result<MainField::nominal_full_length>()) {
+    } else if (auto val = req.template result<MainField::nominal_full_length>()) {
         full_length_mm = *val;
         full_length_source = ValueSource::nominal;
     }
@@ -48,12 +48,12 @@ AmountsInfo::AmountsInfo(const RequestRef &req) {
     }
 
     if (full_weight_g.has_value()) {
-        const auto consumed_weight = req.result<AuxField::consumed_weight>();
+        const auto consumed_weight = req.template result<AuxField::consumed_weight>();
 
         remaining_weight_g = std::max<float>(*full_weight_g - consumed_weight.value_or(0), 0);
 
-        const float filament_diameter_mm = req.result<MainField::filament_diameter>().value_or(1.75f);
-        const float density_g_cm3 = req.result<MainField::density>().value_or(1.24f);
+        const float filament_diameter_mm = req.template result<MainField::filament_diameter>().value_or(1.75f);
+        const float density_g_cm3 = req.template result<MainField::density>().value_or(1.24f);
 
         if (full_length_mm.has_value()) {
             remaining_length_mm = *full_length_mm / *full_weight_g * *remaining_weight_g;
@@ -92,20 +92,30 @@ void AmountsInfo::build_length_str(StringBuilder &sb) const {
 }
 
 AbbreviationInfo::AbbreviationInfo(const RequestRef &req) {
+    init(req);
+}
+
+template <typename Source>
+void AbbreviationInfo::init(const Source &req) {
     if (!req.are_results_valid()) {
         // Cannot reliably process data - failing to read a specific fields might yield unwanted results
         return;
     }
 
-    if (auto abbr = req.result<MainField::material_abbreviation>()) {
+    if (auto abbr = req.template result<MainField::material_abbreviation>()) {
         abbreviation = std::string_view { abbreviation_buffer.begin(), abbr->copy(abbreviation_buffer.begin(), abbreviation_buffer.size()) };
 
-    } else if (const auto type = req.result<MainField::material_type>()) {
+    } else if (const auto type = req.template result<MainField::material_type>()) {
         abbreviation = ::openprinttag::enum_item_name(*type);
     }
 }
 
 UUIDInfo::UUIDInfo(const RequestRef &req, const TagUID &tag_uid) {
+    init(req, &tag_uid);
+}
+
+template <typename Source>
+void UUIDInfo::init(const Source &req, const TagUID *tag_uid) {
     if (!req.are_results_valid()) {
         // Cannot reliably process data - failing to read a specific fields might yield unwanted results
         return;
@@ -130,41 +140,50 @@ UUIDInfo::UUIDInfo(const RequestRef &req, const TagUID &tag_uid) {
         return std::as_bytes(std::span { str });
     };
 
-    if (auto val = req.result<MainField::brand_uuid>()) {
+    if (auto val = req.template result<MainField::brand_uuid>()) {
         brand_uuid = OptionalUUID { *val, OptionalUUID::NulloptCheck::no };
 
-    } else if (auto val = req.result<MainField::brand_name>()) {
-        brand_uuid = make_uuid("5269dfb7-1559-440a-85be-aba5f3eff2d2"_uuid, str_as_bytes(*val));
+    } else if (auto name = req.template result<MainField::brand_name>()) {
+        brand_uuid = make_uuid("5269dfb7-1559-440a-85be-aba5f3eff2d2"_uuid, str_as_bytes(*name));
     }
 
-    if (auto val = req.result<MainField::material_uuid>()) {
+    if (auto val = req.template result<MainField::material_uuid>()) {
         material_uuid = OptionalUUID { *val, OptionalUUID::NulloptCheck::no };
 
-    } else if (auto val = req.result<MainField::material_name>(); val.has_value() && brand_uuid.has_value()) {
-        material_uuid = make_uuid("616fc86d-7d99-4953-96c7-46d2836b9be9"_uuid, brand_uuid->bytes, str_as_bytes(*val));
+    } else if (auto name = req.template result<MainField::material_name>(); name.has_value() && brand_uuid.has_value()) {
+        material_uuid = make_uuid("616fc86d-7d99-4953-96c7-46d2836b9be9"_uuid, brand_uuid->bytes, str_as_bytes(*name));
     }
 
-    if (auto val = req.result<MainField::package_uuid>()) {
+    if (auto val = req.template result<MainField::package_uuid>()) {
         package_uuid = OptionalUUID { *val, OptionalUUID::NulloptCheck::no };
 
-    } else if (auto val = req.result<MainField::gtin>(); val.has_value() && brand_uuid.has_value()) {
+    } else if (auto gtin = req.template result<MainField::gtin>(); gtin.has_value() && brand_uuid.has_value()) {
         ArrayStringBuilder<24> gtin_str;
-        gtin_str.append_printf("%" PRIi64, *val);
+        gtin_str.append_printf("%" PRIi64, *gtin);
         package_uuid = make_uuid("6f7d485e-db8d-4979-904e-a231cd6602b2"_uuid, brand_uuid->bytes, str_as_bytes(gtin_str.string_view()));
     }
 
-    if (auto val = req.result<MainField::instance_uuid>()) {
+    if (auto val = req.template result<MainField::instance_uuid>()) {
         instance_uuid = OptionalUUID { *val, OptionalUUID::NulloptCheck::no };
 
-    } else {
+    } else if (tag_uid) {
         // The spec hashes the UID MSB-first, TagUID is LSB-first
-        decltype(tag_uid.data) uid_msb_first;
-        std::ranges::reverse_copy(tag_uid.data, uid_msb_first.begin());
+        decltype(tag_uid->data) uid_msb_first;
+        std::ranges::reverse_copy(tag_uid->data, uid_msb_first.begin());
         instance_uuid = make_uuid("31062f81-b5bd-4f86-a5f8-46367e841508"_uuid, std::as_bytes(std::span { uid_msb_first }));
     }
 }
 
 FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagUID &tag_uid) {
+    init(req, &tag_uid);
+}
+
+FilamentParametersInfo::FilamentParametersInfo(const FieldValues &values) {
+    init(values, nullptr);
+}
+
+template <typename Source>
+void FilamentParametersInfo::init(const Source &req, const TagUID *tag_uid) {
     using Params = FilamentTypeParameters;
 
     // Mark all parameters as missing, we will clear that as we get them
@@ -184,8 +203,8 @@ FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagU
     };
 
     const auto load_to = [&]<auto field, auto Params::*mem_ptr>() {
-        if (auto val = req.result<field>()) {
-            set.operator()<mem_ptr>(*val);
+        if (auto val = req.template result<field>()) {
+            set.template operator()<mem_ptr>(*val);
         }
     };
 
@@ -229,14 +248,14 @@ FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagU
 
 #if HAS_FILAMENT_BASE_PRESET_PARAM()
             if (auto base_preset = std::get_if<PresetFilamentType>(&base_type)) {
-                set.operator()<&Params::base_preset>(*base_preset);
+                set.template operator()<&Params::base_preset>(*base_preset);
             }
 #endif
         }
 
         // Check validity of the abbreviation
         if (FilamentType { PendingAdHocFilamentType {} }.can_be_renamed_to(abbreviation.abbreviation)) {
-            set.operator()<&Params::name>(abbreviation.abbreviation);
+            set.template operator()<&Params::name>(abbreviation.abbreviation);
 
         } else {
             // Set the name, but do not clear the missing flag
@@ -247,78 +266,84 @@ FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagU
         }
     }
 
-    // Grab tag UID from any request
-    set.operator()<&Params::openprinttag_uid_hash>(tag_uid.hash());
+    // Without a tag, there is nothing to assign; the user should never be asked for it either
+    set.template operator()<&Params::openprinttag_uid_hash>(tag_uid ? tag_uid->hash() : ToolTag::no_tag_hash);
 
     // UUIDs
     {
-        const UUIDInfo uuids { req, tag_uid };
+        const UUIDInfo uuids = [&] {
+            if constexpr (std::is_same_v<Source, FieldValues>) {
+                return UUIDInfo { req };
+            } else {
+                return UUIDInfo { req, *tag_uid };
+            }
+        }();
 
         // Note: set also sets the parameters as not missing
         // That is fine, the user should never be asked to fill in the UUIDs
-        set.operator()<&Params::material_uuid>(uuids.material_uuid);
-        set.operator()<&Params::package_uuid>(uuids.package_uuid);
-        set.operator()<&Params::instance_uuid>(uuids.instance_uuid);
+        set.template operator()<&Params::material_uuid>(uuids.material_uuid);
+        set.template operator()<&Params::package_uuid>(uuids.package_uuid);
+        set.template operator()<&Params::instance_uuid>(uuids.instance_uuid);
     }
 
     // Color
-    load_to.operator()<MainField::primary_color, &Params::color>();
+    load_to.template operator()<MainField::primary_color, &Params::color>();
 
     // Nozzle temp
     {
         stdext::inplace_vector<int16_t, 2> nozzle_temps;
-        if (auto val = req.result<MainField::min_print_temperature>()) {
+        if (auto val = req.template result<MainField::min_print_temperature>()) {
             nozzle_temps.push_back(*val);
         }
-        if (auto val = req.result<MainField::max_print_temperature>()) {
+        if (auto val = req.template result<MainField::max_print_temperature>()) {
             nozzle_temps.push_back(*val);
         }
 
         if (!nozzle_temps.empty()) {
             // Pick average of the temps
             const auto temp = std::ranges::fold_left(nozzle_temps, 0, std::plus {}) / nozzle_temps.size();
-            set.operator()<&Params::nozzle_temperature>(temp);
+            set.template operator()<&Params::nozzle_temperature>(temp);
         }
     }
 
     // Bed temp
     {
         stdext::inplace_vector<int16_t, 2> bed_temps;
-        if (auto val = req.result<MainField::min_bed_temperature>()) {
+        if (auto val = req.template result<MainField::min_bed_temperature>()) {
             bed_temps.push_back(*val);
         }
-        if (auto val = req.result<MainField::max_bed_temperature>()) {
+        if (auto val = req.template result<MainField::max_bed_temperature>()) {
             bed_temps.push_back(*val);
         }
 
         if (!bed_temps.empty()) {
             // Pick average from the temps
             const auto temp = std::ranges::fold_left(bed_temps, 0, std::plus {}) / bed_temps.size();
-            set.operator()<&Params::heatbed_temperature>(temp);
+            set.template operator()<&Params::heatbed_temperature>(temp);
         }
     }
 
-    load_to.operator()<MainField::preheat_temperature, &Params::nozzle_preheat_temperature>();
+    load_to.template operator()<MainField::preheat_temperature, &Params::nozzle_preheat_temperature>();
 
 #if HAS_CHAMBER_API()
-    load_to.operator()<MainField::chamber_temperature, &Params::chamber_target_temperature>();
-    load_to.operator()<MainField::min_chamber_temperature, &Params::chamber_min_temperature>();
-    load_to.operator()<MainField::max_chamber_temperature, &Params::chamber_max_temperature>();
+    load_to.template operator()<MainField::chamber_temperature, &Params::chamber_target_temperature>();
+    load_to.template operator()<MainField::min_chamber_temperature, &Params::chamber_min_temperature>();
+    load_to.template operator()<MainField::max_chamber_temperature, &Params::chamber_max_temperature>();
 #endif
 
     // Tags
     using Tag = ::openprinttag::MaterialTag;
-    const auto tags = req.result<MainField::tags>().value_or(std::span<Tag> {});
+    const auto tags = req.template result<MainField::tags>().value_or(std::span<Tag> {});
     for (Tag tag : tags) {
         switch (tag) {
 
         case Tag::abrasive:
-            set.operator()<&Params::is_abrasive>(true);
+            set.template operator()<&Params::is_abrasive>(true);
             break;
 
 #if HAS_CHAMBER_FILTRATION_API()
         case Tag::filtration_recommended:
-            set.operator()<&Params::requires_filtration>(true);
+            set.template operator()<&Params::requires_filtration>(true);
             break;
 #endif
 
@@ -330,15 +355,15 @@ FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagU
     // Flexibility
     {
         bool is_flexible = false;
-        if (auto val = req.result<MainField::hardness_shore_a>(); val.has_value() && *val < 95) {
+        if (auto shore_a = req.template result<MainField::hardness_shore_a>(); shore_a.has_value() && *shore_a < 95) {
             is_flexible = true;
 
-        } else if (auto val = req.result<MainField::hardness_shore_d>(); val.has_value() && *val < 50) {
+        } else if (auto shore_d = req.template result<MainField::hardness_shore_d>(); shore_d.has_value() && *shore_d < 50) {
             is_flexible = true;
         }
 
         if (is_flexible) {
-            set.operator()<&Params::is_flexible>(true);
+            set.template operator()<&Params::is_flexible>(true);
         }
     }
 
@@ -348,7 +373,7 @@ FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagU
 
     const auto unset_missing_if_equals = [&]<auto Params::*mem_ptr>(auto default_val) {
         if (parameters_unsafe.*mem_ptr == default_val) {
-            unset_missing.operator()<mem_ptr>();
+            unset_missing.template operator()<mem_ptr>();
         }
     };
 
@@ -357,28 +382,31 @@ FilamentParametersInfo::FilamentParametersInfo(const RequestRef &req, const TagU
 
     // But for example in our printer presets, ASA is set as "requires filtration",
     // so if requires_filtration == true from the preset and the tag did not indicate it, the missing flag is kept
-    unset_missing_if_equals.operator()<&Params::is_abrasive>(false);
-    unset_missing_if_equals.operator()<&Params::is_flexible>(false);
+    unset_missing_if_equals.template operator()<&Params::is_abrasive>(false);
+    unset_missing_if_equals.template operator()<&Params::is_flexible>(false);
 
 #if HAS_CHAMBER_FILTRATION_API()
-    unset_missing_if_equals.operator()<&Params::requires_filtration>(false);
+    unset_missing_if_equals.template operator()<&Params::requires_filtration>(false);
 #endif
 
 #if HAS_CHAMBER_API()
     if (is_missing<&FilamentTypeParameters::chamber_min_temperature>() && is_missing<&FilamentTypeParameters::chamber_max_temperature>()) {
         // Chamber target temperature is not required if neither chamber_min_temperature or chamber_max_temperature are present
-        unset_missing.operator()<&FilamentTypeParameters::chamber_target_temperature>();
+        unset_missing.template operator()<&FilamentTypeParameters::chamber_target_temperature>();
     }
 
     // Chamber min max parameters are never required
-    unset_missing.operator()<&FilamentTypeParameters::chamber_min_temperature>();
-    unset_missing.operator()<&FilamentTypeParameters::chamber_max_temperature>();
+    unset_missing.template operator()<&FilamentTypeParameters::chamber_min_temperature>();
+    unset_missing.template operator()<&FilamentTypeParameters::chamber_max_temperature>();
 #endif
 
     // We never miss the color
-    unset_missing.operator()<&FilamentTypeParameters::color>();
+    unset_missing.template operator()<&FilamentTypeParameters::color>();
 
     data_safe_to_use |= missing_parameters.none();
 }
+
+template void AbbreviationInfo::init(const FilamentParametersInfo::FieldValues &);
+template void UUIDInfo::init(const FilamentParametersInfo::FieldValues &, const TagUID *);
 
 } // namespace buddy::openprinttag

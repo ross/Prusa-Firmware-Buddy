@@ -589,3 +589,130 @@ TEST_CASE("buddy::openprinttag::data_utils::UUIDInfo") {
         CHECK_FALSE(info.instance_uuid.has_value());
     }
 }
+
+TEST_CASE("buddy::openprinttag::FieldValues") {
+    using Values = FilamentParametersInfo::FieldValues;
+    using SetError = Values::SetError;
+    Values values;
+
+    SECTION("Unset fields are not present") {
+        CHECK(values.result<MainField::material_type>() == std::unexpected { Request::Error::field_not_present });
+    }
+
+    SECTION("Values are parsed by field type") {
+        REQUIRE(values.set("material_type", "PETG"));
+        REQUIRE(values.set("material_abbreviation", "PETG"));
+        REQUIRE(values.set("min_print_temperature", "230"));
+        REQUIRE(values.set("primary_color", "#ff8000"));
+        REQUIRE(values.set("tags", "abrasive"));
+        REQUIRE(values.set("tags", "filtration_recommended"));
+        REQUIRE(values.set("material_uuid", "1aaca54a-431f-5601-adf5-85dd018f487f"));
+        REQUIRE(values.set("gtin", "8594173675841"));
+
+        CHECK(values.result<MainField::material_type>() == MaterialType::PETG);
+        CHECK(values.result<MainField::material_abbreviation>() == "PETG");
+        CHECK(values.result<MainField::min_print_temperature>() == 230);
+        CHECK(values.result<MainField::primary_color>() == Color::from_rgb(0xff, 0x80, 0x00));
+        CHECK(values.result<MainField::material_uuid>() == "1aaca54a-431f-5601-adf5-85dd018f487f"_uuid);
+        CHECK(values.result<MainField::gtin>() == 8594173675841);
+
+        const auto tags = values.result<MainField::tags>();
+        REQUIRE(tags.has_value());
+        CHECK(std::ranges::equal(*tags, std::array { MaterialTag::abrasive, MaterialTag::filtration_recommended }));
+    }
+
+    SECTION("Later value replaces earlier one") {
+        REQUIRE(values.set("min_print_temperature", "230"));
+        REQUIRE(values.set("min_print_temperature", "240"));
+        CHECK(values.result<MainField::min_print_temperature>() == 240);
+    }
+
+    SECTION("Errors") {
+        CHECK(values.set("no_such_field", "1") == std::unexpected { SetError::unknown_field });
+        CHECK(values.set("min_print_temperature", "hot") == std::unexpected { SetError::invalid_value });
+        CHECK(values.set("material_type", "UNOBTAINIUM") == std::unexpected { SetError::invalid_value });
+        CHECK(values.set("material_type", "") == std::unexpected { SetError::invalid_value });
+        CHECK(values.set("material_abbreviation", "TOOLONGX") == std::unexpected { SetError::invalid_value });
+        CHECK(values.set("primary_color", "ff8000") == std::unexpected { SetError::invalid_value });
+        CHECK(values.set("primary_color", "#ff80") == std::unexpected { SetError::invalid_value });
+        CHECK(values.set("material_uuid", "not-a-uuid") == std::unexpected { SetError::invalid_value });
+
+        // Failed sets leave the field untouched
+        CHECK(values.result<MainField::min_print_temperature>() == std::unexpected { Request::Error::field_not_present });
+    }
+
+    SECTION("Enum array capacity") {
+        for (size_t i = 0; i < FieldTraits<MainField::tags>::max_length; i++) {
+            REQUIRE(values.set("tags", "abrasive"));
+        }
+        CHECK(values.set("tags", "abrasive") == std::unexpected { SetError::too_many_items });
+    }
+
+    SECTION("Too transparent color is not present, as on a tag") {
+        REQUIRE(values.set("primary_color", "#ff80000f"));
+        CHECK(values.result<MainField::primary_color>() == std::unexpected { Request::Error::field_not_present });
+        REQUIRE(values.set("primary_color", "#ff8000ff"));
+        CHECK(values.result<MainField::primary_color>() == Color::from_rgb(0xff, 0x80, 0x00));
+    }
+}
+
+TEST_CASE("buddy::openprinttag::data_utils::FilamentParametersInfo from FieldValues") {
+    FilamentParametersInfo::FieldValues values;
+
+    SECTION("Same parameters as a tag read with the same data") {
+        static constexpr std::array tags { MaterialTag::abrasive };
+        stub_data = StubData {
+            stub_field<MainField::material_type>(MaterialType::PETG),
+            stub_field<MainField::min_print_temperature>(230),
+            stub_field<MainField::max_print_temperature>(250),
+            stub_field<MainField::min_bed_temperature>(80),
+            stub_field<MainField::max_bed_temperature>(90),
+            stub_field<MainField::preheat_temperature>(170),
+            stub_field<MainField::primary_color>(Color::from_rgb(0x12, 0x34, 0x56)),
+            stub_field<MainField::tags>(tags),
+            stub_field<MainField::brand_name>("Prusament"),
+            stub_field<MainField::material_name>("PETG Prusa Orange"),
+        };
+        MultiReadFieldRequest<FilamentParametersInfo::Requirements {}> req { tool_tag };
+        req.issue();
+        const FilamentParametersInfo from_tag { req, tag_uid };
+
+        REQUIRE(values.set("material_type", "PETG"));
+        REQUIRE(values.set("min_print_temperature", "230"));
+        REQUIRE(values.set("max_print_temperature", "250"));
+        REQUIRE(values.set("min_bed_temperature", "80"));
+        REQUIRE(values.set("max_bed_temperature", "90"));
+        REQUIRE(values.set("preheat_temperature", "170"));
+        REQUIRE(values.set("primary_color", "#123456"));
+        REQUIRE(values.set("tags", "abrasive"));
+        REQUIRE(values.set("brand_name", "Prusament"));
+        REQUIRE(values.set("material_name", "PETG Prusa Orange"));
+        const FilamentParametersInfo posted { values };
+
+        CHECK(posted.data_safe_to_use == from_tag.data_safe_to_use);
+        CHECK(posted.missing_parameters == from_tag.missing_parameters);
+
+        // Only the tag identity differs: there is no tag UID to assign or derive the instance from
+        CHECK(posted.parameters.openprinttag_uid_hash == ToolTag::no_tag_hash);
+        CHECK_FALSE(posted.parameters.instance_uuid.has_value());
+        CHECK(from_tag.parameters.instance_uuid.has_value());
+
+        FilamentTypeParameters expected = from_tag.parameters;
+        expected.openprinttag_uid_hash = ToolTag::no_tag_hash;
+        expected.instance_uuid = std::nullopt;
+        CHECK(posted.parameters == expected);
+    }
+
+    SECTION("Explicit instance UUID is kept") {
+        REQUIRE(values.set("material_type", "PLA"));
+        REQUIRE(values.set("instance_uuid", "bf63e92d-9ca5-53d7-9fab-ffdd0240c585"));
+        const FilamentParametersInfo posted { values };
+        CHECK(posted.parameters.instance_uuid == "bf63e92d-9ca5-53d7-9fab-ffdd0240c585"_uuid);
+    }
+
+    SECTION("Unknown material is not safe to use") {
+        REQUIRE(values.set("material_abbreviation", "ABCDEFG"));
+        const FilamentParametersInfo posted { values };
+        CHECK_FALSE(posted.data_safe_to_use);
+    }
+}
