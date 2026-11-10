@@ -34,6 +34,7 @@
     #include <feature/openprinttag/data_utils.hpp>
     #include <feature/openprinttag/requests_read_multi.hpp>
     #include <feature/openprinttag/request_manager.hpp>
+    #include <feature/openprinttag/posted_tag.hpp>
 #endif
 
 #if HAS_ANFC()
@@ -118,6 +119,29 @@ static FSMResponseVariant determine_filament_for_operation(const filament_gcodes
 
 #if HAS_ANFC()
     const auto tool = stdext::get_optional<VirtualToolIndex>(preheat_data.tool);
+
+    const auto compatibility_level = [&](const FilamentTypeParameters &parameters) {
+        buddy::filament_compatibility::CompatibilityReport compat_report;
+        compat_report.generate_noclear({
+            .filament = parameters,
+            .tools = *tool,
+            .assume_filament_already_inserted = preheat_mode_assume_filament_already_inserted(preheat_data.mode),
+        });
+        return compat_report.compatibility_level();
+    };
+
+    // Data of a tag read by an external reader takes precedence: someone posted it on purpose for this load.
+    // Consumed even if unusable, so that it does not linger for the next load.
+    if (const auto posted = tool && can_use_openprinttag(preheat_data.mode) ? buddy::openprinttag::posted_tags().take(*tool) : std::nullopt;
+        posted.has_value()) {
+        if (posted->data_safe_to_use && compatibility_level(posted->parameters) == buddy::compatibility_checks::CompatibilityLevel::fully_compatible) {
+            const FilamentType ft = PendingAdHocFilamentType {};
+            ft.set_parameters(posted->parameters);
+            return FSMResponseVariant::make(ft);
+        }
+        // Otherwise the user picks the filament as usual
+    }
+
     const auto tag = tool.and_then(buddy::openprinttag::ToolTag::for_tool_ephemeral);
 
     // If an OPT is detected for the tool, possibly automatically load data from it
@@ -172,19 +196,9 @@ static FSMResponseVariant determine_filament_for_operation(const filament_gcodes
 
             opt::FilamentParametersInfo params { req, tag_uid.value_or(buddy::openprinttag::TagUID {}) };
 
-            const auto compatibility_level = [&] {
-                buddy::filament_compatibility::CompatibilityReport compat_report;
-                compat_report.generate_noclear({
-                    .filament = params.parameters,
-                    .tools = *tool,
-                    .assume_filament_already_inserted = preheat_mode_assume_filament_already_inserted(preheat_data.mode),
-                });
-                return compat_report.compatibility_level();
-            };
-
             if (tag_uid.has_value()
                 && params.data_safe_to_use
-                && compatibility_level() == buddy::compatibility_checks::CompatibilityLevel::fully_compatible //
+                && compatibility_level(params.parameters) == buddy::compatibility_checks::CompatibilityLevel::fully_compatible //
             ) {
                 // Everything derived perfectly from the tag -> apply the parameters and be happy
                 const FilamentType ft = PendingAdHocFilamentType {};
