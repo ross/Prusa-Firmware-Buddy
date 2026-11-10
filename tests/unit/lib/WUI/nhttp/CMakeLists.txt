@@ -15,6 +15,7 @@ add_executable(
   ${CMAKE_CURRENT_SOURCE_DIR}/headers_tests.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/job_command_tests.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/file_command_tests.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/filament_post_tests.cpp
   # ${CMAKE_CURRENT_SOURCE_DIR}/segmented_json_rendering.cpp
   # Tested files
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/common_selectors.cpp
@@ -24,6 +25,7 @@ add_executable(
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/gcode_preview.cpp
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/server.cpp
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/job_command.cpp
+  ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/filament_post.cpp
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/static_mem.cpp
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/splice.cpp
   ${CMAKE_SOURCE_DIR}/lib/WUI/nhttp/send_file.cpp

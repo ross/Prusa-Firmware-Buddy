@@ -25,6 +25,13 @@
 #include <span>
 #include <unistd.h>
 
+#include <option/has_anfc.h>
+#if HAS_ANFC()
+    #include "../nhttp/filament_post.h"
+    #include <feature/openprinttag/posted_tag.hpp>
+    #include <tool_index.hpp>
+#endif
+
 namespace nhttp::link_content {
 
 using http::Method;
@@ -93,6 +100,33 @@ namespace {
             out.next = StatusPage(Status::BadRequest, parser);
         }
     }
+
+#if HAS_ANFC()
+    void handle_filament_tool(string_view tool_str, const RequestParser &parser, handler::Step &out) {
+        uint8_t raw_tool;
+        const auto parsed = std::from_chars(tool_str.begin(), tool_str.end(), raw_tool);
+        if (parsed.ec != std::errc {} || parsed.ptr != tool_str.end() || raw_tool >= VirtualToolIndex::count || !VirtualToolIndex::from_raw(raw_tool).is_enabled()) {
+            out.next = StatusPage(Status::NotFound, parser);
+            return;
+        }
+        const auto tool = VirtualToolIndex::from_raw(raw_tool);
+
+        switch (parser.method) {
+        case Method::Post: {
+            auto start = nhttp::printer::FilamentPost::start(parser.content_length, tool.to_raw(), parser.can_keep_alive(), parser.accepts_json);
+            std::visit([&](auto &&next) { out.next = std::move(next); }, std::move(start));
+            return;
+        }
+        case Method::Delete:
+            buddy::openprinttag::posted_tags().clear(tool);
+            out.next = StatusPage(Status::NoContent, parser);
+            return;
+        default:
+            out.next = StatusPage(Status::MethodNotAllowed, parser);
+            return;
+        }
+    }
+#endif
 } // namespace
 
 Selector::Accepted PrusaLinkApiV1::accept(const RequestParser &parser, handler::Step &out) const {
@@ -172,6 +206,11 @@ Selector::Accepted PrusaLinkApiV1::accept(const RequestParser &parser, handler::
     } else if (suffix == "filament") {
         get_only(SendJson(FilamentRenderer(), parser.can_keep_alive()), parser, out);
         return Accepted::Accepted;
+#if HAS_ANFC()
+    } else if (auto tool_str = remove_prefix(suffix, "filament/"); tool_str.has_value()) {
+        handle_filament_tool(*tool_str, parser, out);
+        return Accepted::Accepted;
+#endif
     } else if (suffix == "transfer") {
         if (auto status = Monitor::instance.status(); status.has_value()) {
             get_only(SendJson(TransferRenderer(status->id, http::APIVersion::v1), parser.can_keep_alive()), parser, out);

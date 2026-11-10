@@ -48,7 +48,11 @@
 #include <string_view>
 #include <variant>
 
+#include <option/has_anfc.h>
 #include <option/networking_benchmark_enabled.h>
+#if HAS_ANFC()
+    #include "filament_post.h"
+#endif
 #if NETWORKING_BENCHMARK_ENABLED()
     #include "networking_benchmark.h"
 #endif
@@ -156,6 +160,9 @@ namespace handler {
         printer::JobCommand,
         printer::FileInfo,
         printer::FileCommand,
+#if HAS_ANFC()
+        printer::FilamentPost,
+#endif
 #if NETWORKING_BENCHMARK_ENABLED()
         NetworkingBenchmark,
 #endif

@@ -56,6 +56,10 @@ if(HAS_ESP)
   target_sources(WUI INTERFACE espif.cpp)
 endif()
 
+if(HAS_ANFC)
+  target_sources(WUI INTERFACE nhttp/filament_post.cpp nhttp/filament_post_openprinttag.cpp)
+endif()
+
 file(GLOB AUTOMATA_GENERATORS ${PROJECT_ROOT_DIR}/utils/gen-automata/*.py)
 
 add_custom_command(
